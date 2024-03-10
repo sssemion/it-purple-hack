@@ -8,6 +8,8 @@ from typing import Any, Generic, Iterator, Protocol, TypeVar
 import bs4
 import requests
 from PyPDF2 import PdfReader
+from requests.exceptions import HTTPError
+from tenacity import retry, stop_after_attempt, wait_random_exponential, retry_if_exception
 
 
 class BaseParseError(Exception):
@@ -54,8 +56,7 @@ class BaseParser(ABC, Generic[T]):
         return f'{self.BASE_URL}/{path}/'
 
     def fetch_pdf_document_text(self, document_path: str) -> str:
-        r = requests.get(self.get_full_url(document_path))
-        r.raise_for_status()
+        r = self.request(self.get_full_url(document_path))
 
         fd = BytesIO()
         fd.write(r.content)
@@ -83,6 +84,11 @@ class BaseParser(ABC, Generic[T]):
         pass
 
     @staticmethod
+    @retry(retry=retry_if_exception(lambda e: e.response.code in (401, 403) or e.response.code >= 500),
+           wait=wait_random_exponential(max=60),
+           stop=stop_after_attempt(10),
+           reraise=True,
+           )
     def request(url: str, params: dict[str, Any] | None = None) -> requests.Response:
         r = requests.get(url, params=params)
         r.raise_for_status()

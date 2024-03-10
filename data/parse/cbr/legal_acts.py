@@ -1,7 +1,5 @@
 import csv
 import dataclasses
-import datetime
-import re
 from collections.abc import Iterator
 from functools import cached_property
 from typing import Any
@@ -9,22 +7,10 @@ from typing import Any
 import bs4
 from progress.bar import Bar
 
-from data.parse.cbr.base import BaseCBRParser
-
-
-@dataclasses.dataclass
-class Document:
-    name: str
-    date: datetime.date
-    title: str
-    url: str
-    source: str
-    text: str
+from data.parse.cbr.base import BaseCBRParser, Document
 
 
 class LegalActsParser(BaseCBRParser):
-    DATE_NUMBER_REGEXP = re.compile(r'No (?P<name>.+)\nот (?P<dd>\d{2})\.(?P<mm>\d{2})\.(?P<yyyy>\d{4})')
-
     @cached_property
     def _initial_page(self) -> bs4.BeautifulSoup:
         r = self.request(self.get_full_url('na'))
@@ -66,17 +52,9 @@ class LegalActsParser(BaseCBRParser):
             yield self.proceed_item(cross_result)
 
     def proceed_item(self, tag: bs4.Tag) -> Document:
-        date_number = self.DATE_NUMBER_REGEXP.fullmatch(self.extract_text(tag.select_one('.date-number')))
         title = tag.select_one('div.title-source > div.title a')
         url = title['href']
-        source = tag.select_one('div.title-source > div.source')
-        doc = Document(name=date_number['name'],
-                       date=datetime.date(int(date_number['yyyy']), int(date_number['mm']), int(date_number['dd'])),
-                       title=self.extract_text(title),
-                       url=url,
-                       source=self.extract_text(source),
-                       text=self.fetch_pdf_document_text(url),
-                       )
+        doc = Document(url=url, text=self.fetch_pdf_document_text(url))
         self._progress_bar.next()
         return doc
 

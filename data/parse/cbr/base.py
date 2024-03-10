@@ -1,10 +1,14 @@
+import dataclasses
 from abc import ABC
-from typing import Generic, TypeVar
 
 from data.parse.base import BaseParser
 
-T = TypeVar('T')
+
+@dataclasses.dataclass
+class Document:
+    url: str
+    text: str
 
 
-class BaseCBRParser(BaseParser, ABC, Generic[T]):
+class BaseCBRParser(BaseParser[Document], ABC):
     BASE_URL = 'https://cbr.ru'

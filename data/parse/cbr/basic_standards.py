@@ -1,3 +1,4 @@
+import csv
 import dataclasses
 import datetime
 from functools import cached_property
@@ -7,26 +8,18 @@ import bs4
 from progress.bar import Bar
 
 from data.parse.base import T
-from data.parse.cbr.base import BaseCBRParser
+from data.parse.cbr.base import BaseCBRParser, Document
 
 
-@dataclasses.dataclass
-class Document:
-    organization_type: str
-    basic_standard_type: str
-    name: str
-    date: datetime.date  # дата начала применения
-    protocol_uid: str
-
-
-class BasicStandardsParser(BaseCBRParser[Document]):
+class BasicStandardsParser(BaseCBRParser):
     DATE_FORMAT = '%d.%m.%Y'
 
     def proceed_item(self, tag: bs4.Tag) -> Document:
         tds = tag.select('td')
-        name = self.extract_text(tds[1])
-        url = tds[1]['href']
+        url = tds[1].select_one('a')['href']
+        doc = Document(url=url, text=self.fetch_pdf_document_text(url))
         self._progress_bar.next()
+        return doc
 
     def proceed(self) -> Iterator[T]:
         for item in self.page.select('div.table > table > tbody > tr'):
@@ -57,7 +50,10 @@ class BasicStandardsParser(BaseCBRParser[Document]):
 
 def main() -> None:
     parser = BasicStandardsParser(Bar)
-    print(parser.total_items)
+    with open('basic_standards.csv', 'w') as fd:
+        writer = csv.writer(fd)
+        for doc in parser.proceed():
+            writer.writerow(dataclasses.astuple(doc))
 
 
 if __name__ == '__main__':
