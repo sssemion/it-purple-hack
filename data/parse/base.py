@@ -8,8 +8,8 @@ from typing import Any, Generic, Iterator, Protocol, TypeVar
 import bs4
 import requests
 from PyPDF2 import PdfReader
-from requests.exceptions import HTTPError
-from tenacity import retry, stop_after_attempt, wait_random_exponential, retry_if_exception
+from PyPDF2.errors import PdfReadError
+from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_random_exponential, retry_if_exception
 
 
 class BaseParseError(Exception):
@@ -44,8 +44,9 @@ class BaseParser(ABC, Generic[T]):
     BASE_URL: str
     PROGRESS_BAR_NAME: str = 'Progress'
 
-    def __init__(self, progress: type[ProgressProtocol] = DummyProgressBar):
+    def __init__(self, progress: type[ProgressProtocol] = DummyProgressBar, start_from_idx: int = 0):
         self._progress_class = progress
+        self._start_from_idx = start_from_idx
 
     @cached_property
     def _progress_bar(self) -> ProgressProtocol:
@@ -55,8 +56,12 @@ class BaseParser(ABC, Generic[T]):
         path = path.strip('/')
         return f'{self.BASE_URL}/{path}/'
 
-    def fetch_pdf_document_text(self, document_path: str) -> str:
-        r = self.request(self.get_full_url(document_path))
+    @retry(retry=retry_if_exception_type(PdfReadError),
+           stop=stop_after_attempt(5),
+           reraise=True,
+           )
+    def fetch_pdf_document_text(self, url: str, params: dict[str, Any] | None = None) -> str:
+        r = self.request(url, params=params)
 
         fd = BytesIO()
         fd.write(r.content)
@@ -83,13 +88,16 @@ class BaseParser(ABC, Generic[T]):
     def proceed_item(self, tag: bs4.Tag) -> T:
         pass
 
-    @staticmethod
-    @retry(retry=retry_if_exception(lambda e: e.response.code in (401, 403) or e.response.code >= 500),
+    @retry(retry=retry_if_exception(lambda e: e.response.status_code in (401, 403) or e.response.status_code >= 500),
            wait=wait_random_exponential(max=60),
            stop=stop_after_attempt(10),
            reraise=True,
            )
-    def request(url: str, params: dict[str, Any] | None = None) -> requests.Response:
-        r = requests.get(url, params=params)
+    def request(self, url: str, params: dict[str, Any] | None = None) -> requests.Response:
+        r = self.__session.get(url, params=params)
         r.raise_for_status()
         return r
+
+    @cached_property
+    def __session(self) -> requests.Session:
+        return requests.session()

@@ -1,3 +1,4 @@
+import argparse
 import csv
 import dataclasses
 from collections.abc import Iterator
@@ -20,7 +21,7 @@ class LegalActsParser(BaseCBRParser):
     @property
     def page_base_url(self) -> str:
         next_button = self._initial_page.select_one('#la_load')
-        return next_button['data-cross-ajax-url']
+        return next_button['data-cross-ajax-url'].split('?', 1)[0]
 
     @property
     def page_size(self) -> int:
@@ -29,11 +30,15 @@ class LegalActsParser(BaseCBRParser):
     @property
     def total_items(self) -> int:
         text = self.extract_text(self._initial_page.select_one('div.results div.results_counter'))
-        return int(text.split(' ', 1)[0])
+        return int(text.split(' ', 1)[0]) - self._start_from_idx
 
     @property
     def total_pages(self) -> int:
         return (self.total_items + self.page_size - 1) // self.page_size
+
+    @property
+    def _start_page_idx(self) -> int:
+        return self._start_from_idx // self.page_size
 
     @staticmethod
     def _get_params_for_page(page_idx: int) -> dict[str, Any]:
@@ -47,6 +52,8 @@ class LegalActsParser(BaseCBRParser):
 
         soup = bs4.BeautifulSoup(r.content, 'html.parser')
         results_list = soup.select('div.cross-result')
+        if self._start_page_idx == page_idx:
+            results_list = results_list[self._start_from_idx % self.page_size:]
 
         for cross_result in results_list:
             yield self.proceed_item(cross_result)
@@ -54,19 +61,27 @@ class LegalActsParser(BaseCBRParser):
     def proceed_item(self, tag: bs4.Tag) -> Document:
         title = tag.select_one('div.title-source > div.title a')
         url = title['href']
-        doc = Document(url=url, text=self.fetch_pdf_document_text(url))
+        try:
+            text = self.fetch_document_text(url)
+        except:  # noqa
+            text = None
+        doc = Document(url=url, text=text)
         self._progress_bar.next()
         return doc
 
     def proceed(self) -> Iterator[Document]:
-        for page_idx in range(self.total_pages):
+        for page_idx in range(self._start_page_idx, self._start_page_idx + self.total_pages):
             yield from self.proceed_page(page_idx)
         self._progress_bar.finish()
 
 
 def main():
-    parser = LegalActsParser(Bar)
-    with open('legal_acts.csv', 'w') as fd:
+    arg_parser = argparse.ArgumentParser()
+    arg_parser.add_argument('--start-from-idx', type=int, default=0)
+    args = arg_parser.parse_args()
+
+    parser = LegalActsParser(Bar, args.start_from_idx)
+    with open('legal_acts.csv', 'a') as fd:
         writer = csv.writer(fd)
         for doc in parser.proceed():
             writer.writerow(dataclasses.astuple(doc))
