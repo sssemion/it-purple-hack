@@ -1,6 +1,8 @@
 import argparse
 import csv
 import dataclasses
+import datetime
+import logging
 from collections.abc import Iterator
 from functools import cached_property
 from typing import Any
@@ -63,8 +65,11 @@ class LegalActsParser(BaseCBRParser):
         url = title['href']
         try:
             text = self.fetch_document_text(url)
-        except:  # noqa
+        except Exception as e:  # noqa
+            logging.error(e)
             text = None
+        if not url.lower().startswith('http'):
+            url = self.get_full_url(url)
         doc = Document(url=url, text=text)
         self._progress_bar.next()
         return doc
@@ -76,6 +81,7 @@ class LegalActsParser(BaseCBRParser):
 
 
 def main():
+    print(f'Скрипт запущен в {datetime.datetime.now()}')
     arg_parser = argparse.ArgumentParser()
     arg_parser.add_argument('--start-from-idx', type=int, default=0)
     args = arg_parser.parse_args()

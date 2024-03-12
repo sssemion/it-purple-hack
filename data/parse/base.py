@@ -1,8 +1,8 @@
 import html
+import tempfile
 import unicodedata
 from abc import ABC, abstractmethod
 from functools import cached_property
-from io import BytesIO
 from typing import Any, Generic, Iterator, Protocol, TypeVar
 
 import bs4
@@ -10,6 +10,8 @@ import requests
 from PyPDF2 import PdfReader
 from PyPDF2.errors import PdfReadError
 from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_random_exponential, retry_if_exception
+
+from data.parse.document_parsers.pdf.base import BasePDFParser
 
 
 class BaseParseError(Exception):
@@ -63,13 +65,28 @@ class BaseParser(ABC, Generic[T]):
     def fetch_pdf_document_text(self, url: str, params: dict[str, Any] | None = None) -> str:
         r = self.request(url, params=params)
 
-        fd = BytesIO()
-        fd.write(r.content)
-        reader = PdfReader(fd)
-        text = ''
-        for page in reader.pages:
-            text += page.extract_text()
-        return text
+        with tempfile.NamedTemporaryFile(mode='wb', suffix='.pdf') as fd:
+            fd.write(r.content)
+            reader = PdfReader(fd.name)
+            if self._is_pdf_scanned(reader):
+                return self.ocr_pdf_parser.parse(fd.name)
+            else:
+                text = ''
+                for page in reader.pages:
+                    text += page.extract_text()
+                return text
+
+    @staticmethod
+    def _is_pdf_scanned(pdf: PdfReader) -> bool:
+        """Проверяет, является ли документ отсканированным, т.е. не содержит текстовых данных, а только графические"""
+        producer = 'paper' in pdf.metadata.get('/Producer', '').lower()
+        creator = any(item in pdf.metadata.get('/Creator', '').lower() for item in ('canon', 'xerox'))
+        return any((producer, creator))
+
+    @cached_property
+    @abstractmethod
+    def ocr_pdf_parser(self) -> BasePDFParser:
+        pass
 
     @staticmethod
     def extract_text(tag: bs4.Tag) -> str:
@@ -88,9 +105,11 @@ class BaseParser(ABC, Generic[T]):
     def proceed_item(self, tag: bs4.Tag) -> T:
         pass
 
-    @retry(retry=retry_if_exception(lambda e: e.response.status_code in (401, 403) or e.response.status_code >= 500),
+    @retry(retry=retry_if_exception(lambda e: getattr(e, 'response', None) and
+                                              (e.response.status_code in (401, 403) or
+                                               e.response.status_code >= 500)),
            wait=wait_random_exponential(max=60),
-           stop=stop_after_attempt(10),
+           stop=stop_after_attempt(5),
            reraise=True,
            )
     def request(self, url: str, params: dict[str, Any] | None = None) -> requests.Response:
