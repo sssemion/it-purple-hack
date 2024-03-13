@@ -1,4 +1,5 @@
 from nltk.tokenize import sent_tokenize
+import pandas as pd
 
 class Chunker:
     def __init__(self, max_chunk_len=2500, overlap_len=50):
@@ -107,16 +108,16 @@ class Generator:
         
 
 class Retriever:
-    def __init__(self, retriever_model, clickhouse_client):
+    def __init__(self, retriever_models, clickhouse_client):
         self._client = clickhouse_client
-        self._model = retriever_model
+        self._models = retriever_models
         
         self._query = """
         WITH similar_chunks AS (
             SELECT 
                 c1.chunk_uuid AS similar_uuid,
-                c1.embedding AS similar_embedding,
-                cosineDistance(embedding, {question_embedding}) AS similarity_score
+                c1.{model}_embedding AS similar_embedding,
+                cosineDistance({model}_embedding, {question_embedding}) AS similarity_score
             FROM 
                 chunk_embedding c1
             ORDER BY 
@@ -137,8 +138,11 @@ class Retriever:
         """
         
     def get_neighbors(self, question, k=5):
-        question_embedding = self._model.encode(question, batch_size=32, normalize_embeddings=True)
-        query = self._query.format(question_embedding=question_embedding.tolist(), knn_k=k)
-        topk = self._client.query_df(query).set_index('uuid')
-        
-        return topk.text.tolist(), topk.url.unique().tolist()
+        topk = None
+        for model in self._models:
+            question_embedding = self._models[model].encode(question, batch_size=32, normalize_embeddings=True)
+            query = self._query.format(question_embedding=question_embedding.tolist(), knn_k=k, model=model)
+            
+            topk = pd.concat([topk, self._client.query_df(query).set_index('uuid')])
+                
+        return topk.text.unique().tolist(), topk.url.unique().tolist()
