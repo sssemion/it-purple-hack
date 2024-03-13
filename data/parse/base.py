@@ -62,19 +62,22 @@ class BaseParser(ABC, Generic[T]):
            stop=stop_after_attempt(5),
            reraise=True,
            )
-    def fetch_pdf_document_text(self, url: str, params: dict[str, Any] | None = None) -> str:
+    def fetch_pdf_document_text(self, url: str, params: dict[str, Any] | None = None) -> tuple[str, dict[str, str]]:
         r = self.request(url, params=params)
 
         with tempfile.NamedTemporaryFile(mode='wb', suffix='.pdf') as fd:
             fd.write(r.content)
             reader = PdfReader(fd.name)
+            metadata = {k.strip('/'): v for k, v in reader.metadata.items()}
             if self._is_pdf_scanned(reader):
-                return self.ocr_pdf_parser.parse(fd.name)
+                metadata['type'] = 'pdf/scanned'
+                return self.ocr_pdf_parser.parse(fd.name), metadata
             else:
                 text = ''
                 for page in reader.pages:
                     text += page.extract_text()
-                return text
+                metadata['type'] = 'pdf/text'
+                return text, metadata
 
     @staticmethod
     def _is_pdf_scanned(pdf: PdfReader) -> bool:
@@ -113,7 +116,7 @@ class BaseParser(ABC, Generic[T]):
            reraise=True,
            )
     def request(self, url: str, params: dict[str, Any] | None = None) -> requests.Response:
-        r = self.__session.get(url, params=params)
+        r = self.__session.get(url, params=params, timeout=120)
         r.raise_for_status()
         return r
 

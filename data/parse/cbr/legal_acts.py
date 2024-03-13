@@ -2,7 +2,9 @@ import argparse
 import csv
 import dataclasses
 import datetime
+import json
 import logging
+import re
 from collections.abc import Iterator
 from functools import cached_property
 from typing import Any
@@ -14,6 +16,8 @@ from data.parse.cbr.base import BaseCBRParser, Document
 
 
 class LegalActsParser(BaseCBRParser):
+    DATE_NUMBER_REGEXP = re.compile(r'No (?P<name>.+)\nот (?P<dd>\d{2})\.(?P<mm>\d{2})\.(?P<yyyy>\d{4})')
+
     @cached_property
     def _initial_page(self) -> bs4.BeautifulSoup:
         r = self.request(self.get_full_url('na'))
@@ -61,16 +65,27 @@ class LegalActsParser(BaseCBRParser):
             yield self.proceed_item(cross_result)
 
     def proceed_item(self, tag: bs4.Tag) -> Document:
+        date_number = self.DATE_NUMBER_REGEXP.fullmatch(self.extract_text(tag.select_one('.date-number')))
         title = tag.select_one('div.title-source > div.title a')
         url = title['href']
+        source = tag.select_one('div.title-source > div.source')
         try:
-            text = self.fetch_document_text(url)
+            text, metadata = self.fetch_document_text(url)
+            text = text.strip()
         except Exception as e:  # noqa
             logging.error(e)
-            text = None
+            text, metadata = None, None
         if not url.lower().startswith('http'):
             url = self.get_full_url(url)
-        doc = Document(url=url, text=text)
+        doc = Document(
+            url=url,
+            text=text,
+            title=self.extract_text(title),
+            date=datetime.date(int(date_number['yyyy']), int(date_number['mm']), int(date_number['dd'])),
+            source=self.extract_text(source),
+            name=date_number['name'],
+            metadata=json.dumps(metadata or {}),
+        )
         self._progress_bar.next()
         return doc
 
@@ -87,7 +102,7 @@ def main():
     args = arg_parser.parse_args()
 
     parser = LegalActsParser(Bar, args.start_from_idx)
-    with open('legal_acts.csv', 'a') as fd:
+    with open('legal_acts_extra.csv', 'a') as fd:
         writer = csv.writer(fd)
         for doc in parser.proceed():
             writer.writerow(dataclasses.astuple(doc))
