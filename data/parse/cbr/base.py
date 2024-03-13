@@ -1,7 +1,7 @@
 import dataclasses
 import json
 import re
-from abc import ABC
+from abc import ABC, abstractmethod
 from datetime import datetime, date
 from functools import cached_property
 from typing import Any
@@ -61,3 +61,12 @@ class BaseCBRParser(BaseParser[Document], ABC):
     @cached_property
     def ocr_pdf_parser(self) -> BasePDFParser:
         return TesseractPDFParser('rus')
+
+    @property
+    @abstractmethod
+    def FROM(self) -> str:
+        pass
+
+    def extend_metadata(self, metadata: dict[str, str]) -> dict[str, str]:
+        metadata['from'] = self.FROM
+        return metadata

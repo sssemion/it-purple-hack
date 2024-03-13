@@ -1,6 +1,7 @@
 import csv
 import dataclasses
 import datetime
+import json
 from functools import cached_property
 from typing import Any, Iterator
 
@@ -13,11 +14,22 @@ from data.parse.cbr.base import BaseCBRParser, Document
 
 class BasicStandardsParser(BaseCBRParser):
     DATE_FORMAT = '%d.%m.%Y'
+    FROM = 'basic_standard'
 
     def proceed_item(self, tag: bs4.Tag) -> Document:
         tds = tag.select('td')
-        url = tds[1].select_one('a')['href']
-        doc = Document(url=url, text=self.fetch_pdf_document_text(url))
+        fin_org_type, title, _date1, _date2, protocol_number, publication_date, _date3, _redaction = tds
+        url = title.select_one('a')['href']
+        url = self.get_full_url(url)
+        text, meta = self.fetch_pdf_document_text(url)
+        doc = Document(url=self.prepare_url(url),
+                       text=text.strip(),
+                       title=self.extract_text(title),
+                       date=datetime.datetime.strptime(self.extract_text(publication_date), self.DATE_FORMAT).date(),
+                       name=self.extract_text(protocol_number),
+                       source=self.extract_text(fin_org_type),
+                       metadata=json.dumps(self.extend_metadata(meta)),
+                       )
         self._progress_bar.next()
         return doc
 

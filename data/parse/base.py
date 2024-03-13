@@ -123,3 +123,10 @@ class BaseParser(ABC, Generic[T]):
     @cached_property
     def __session(self) -> requests.Session:
         return requests.session()
+
+    @staticmethod
+    def prepare_url(url: str) -> str:
+        if not url.endswith('/'):
+            url += '/'
+        url = url.replace('//www.', '//')
+        return url

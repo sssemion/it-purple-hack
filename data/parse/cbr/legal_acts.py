@@ -17,6 +17,7 @@ from data.parse.cbr.base import BaseCBRParser, Document
 
 class LegalActsParser(BaseCBRParser):
     DATE_NUMBER_REGEXP = re.compile(r'No (?P<name>.+)\nот (?P<dd>\d{2})\.(?P<mm>\d{2})\.(?P<yyyy>\d{4})')
+    FROM = 'legal_act'
 
     @cached_property
     def _initial_page(self) -> bs4.BeautifulSoup:
@@ -78,13 +79,13 @@ class LegalActsParser(BaseCBRParser):
         if not url.lower().startswith('http'):
             url = self.get_full_url(url)
         doc = Document(
-            url=url,
+            url=self.prepare_url(url),
             text=text,
             title=self.extract_text(title),
             date=datetime.date(int(date_number['yyyy']), int(date_number['mm']), int(date_number['dd'])),
             source=self.extract_text(source),
             name=date_number['name'],
-            metadata=json.dumps(metadata or {}),
+            metadata=json.dumps(self.extend_metadata(metadata or {})),
         )
         self._progress_bar.next()
         return doc
