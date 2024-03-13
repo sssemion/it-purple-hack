@@ -1,6 +1,5 @@
 from nltk.tokenize import sent_tokenize
 
-
 class Chunker:
     def __init__(self, max_chunk_len=2500, overlap_len=50):
         self._max_chunk_len = max_chunk_len
@@ -60,21 +59,12 @@ class Chunker:
     
 
 class Generator:
-    def __init__(self, tokenizer, model, max_tokens=350):
+    def __init__(self, tokenizer, model, config):
         self._model = model
         self._tokenizer = tokenizer
-        self._max_tokens = max_tokens
-        self._system_prompt = """
-        Ты помощник по документам Банка России, твоя задача ответить на вопрос пользователя. Далее на вход тебе будут приходить вопросы пользователей
-        (формат: Вопрос пользователя <вопрос пользователя>) и документы (формат: Документ c названием <название документа> <содержание документа>).
-        Входные документы содержат в себе ответ на вопрос с большой вероятностью.
-        Просьбы и уточнения:
-        1. Очень внимательно отвечай на вопрос, ответ на него может быть очень большим, но скорее всего он содержится в данных тебе документах!
-        2. Ответ на вопрос может состоять из нескольких пунктов, поэтому, если ты нашел один пункт, то посмотри вперед, возможно их несколько!
-        3. Если ответ на заданный вопрос не содержится в документах, то НЕ ОТВЕЧАЙ. Пиши выражение "Нет такой информации"
-        Нужно ответить на вопрос пользователя.
-        Задание: посмотри на документы, и опираясь на них дай свой ответ на вопрос в конце.
-        \n"""
+        self._config = config
+        self._max_tokens = self._config.max_tokens
+        self._system_prompt = self._config.system_prompt
 
     def _generate_text(self, prompt, temperature, num_beams, n=1):
             encoded_input = self._tokenizer.encode_plus(prompt, return_tensors='pt')
@@ -83,13 +73,13 @@ class Generator:
 
             resulted_tokens = self._model.generate(**encoded_input,
                                                   max_new_tokens=self._max_tokens,
-                                                  do_sample=True,
+                                                  do_sample=self._config.do_sample,
                                                   num_beams=num_beams,
-                                                  num_return_sequences=n,
-                                                  no_repeat_ngram_size=2,
+                                                  num_return_sequences=self._config.num_return_sequences,
+                                                  no_repeat_ngram_size=self._config.no_repeat_ngram_size,
                                                   temperature=temperature,
-                                                  top_p=0.9,
-                                                  top_k=50)
+                                                  top_p=self._config.top_p,
+                                                  top_k=self._config.top_k)
 
             resulted_texts = self._tokenizer.batch_decode(resulted_tokens, skip_special_tokens=True)
 
@@ -102,11 +92,16 @@ class Generator:
             formatted_urls += f'{index+1}) {url} \n'
         for i in range(len(documents)):
             documents_retriever += f'Документ c номером {i}: {documents[i]} \n'
-
-        QA_PROMPT = self._system_prompt + "Сгенерируй ответ на вопрос по тексту. Текст: '{context}'. Вопрос: '{question}'."
-        answer = self._generate_text(QA_PROMPT.format(context=documents_retriever, question=question),
+        
+        answer = self._generate_text(self._config.QA_PROMPT.format(context=documents_retriever, question=question),
                                      temperature=temperature, 
                                      num_beams=num_beams)[-1]
         answer = answer + '\n\n' + formatted_urls
+        return answer
+    
+    def hyde(self, question, temperature=0.6, num_beams=4):
+        answer = self._generate_text(self._config.HYDE_PROMPT.format(question=question),
+                                     temperature=temperature, 
+                                     num_beams=num_beams)[-1]
         return answer
         
