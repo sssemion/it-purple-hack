@@ -1,5 +1,7 @@
 from nltk.tokenize import sent_tokenize
 import pandas as pd
+import numpy as np
+
 
 class Chunker:
     def __init__(self, max_chunk_len=2500, overlap_len=50):
@@ -55,63 +57,13 @@ class Chunker:
             chunks.extend(cur_chunks)
             urls.extend(cur_urls)
         return chunks, urls
-    
-    
-    
-
-class Generator:
-    def __init__(self, tokenizer, model, config):
-        self._model = model
-        self._tokenizer = tokenizer
-        self._config = config
-        self._max_tokens = self._config.max_tokens
-        self._system_prompt = self._config.system_prompt
-
-    def _generate_text(self, prompt, temperature, num_beams, n=1):
-            encoded_input = self._tokenizer.encode_plus(prompt, return_tensors='pt')
-
-            encoded_input = {k: v.to(self._model.device) for k, v in encoded_input.items()}
-
-            resulted_tokens = self._model.generate(**encoded_input,
-                                                  max_new_tokens=self._max_tokens,
-                                                  do_sample=self._config.do_sample,
-                                                  num_beams=num_beams,
-                                                  num_return_sequences=self._config.num_return_sequences,
-                                                  no_repeat_ngram_size=self._config.no_repeat_ngram_size,
-                                                  temperature=temperature,
-                                                  top_p=self._config.top_p,
-                                                  top_k=self._config.top_k)
-
-            resulted_texts = self._tokenizer.batch_decode(resulted_tokens, skip_special_tokens=True)
-
-            return resulted_texts
-
-    def get_answer(self, question, documents, urls, temperature=0.6, num_beams=4):
-        documents_retriever = ''
-        formatted_urls = 'Использованные документы:\n'
-        for index, url in enumerate(urls):
-            formatted_urls += f'{index+1}) {url} \n'
-        for i in range(len(documents)):
-            documents_retriever += f'Документ c номером {i}: {documents[i]} \n'
-        
-        answer = self._generate_text(self._config.QA_PROMPT.format(context=documents_retriever, question=question),
-                                     temperature=temperature, 
-                                     num_beams=num_beams)[-1]
-        answer = answer + '\n\n' + formatted_urls
-        return answer
-    
-    def hyde(self, question, temperature=0.6, num_beams=4):
-        answer = self._generate_text(self._config.HYDE_PROMPT.format(question=question),
-                                     temperature=temperature, 
-                                     num_beams=num_beams)[-1]
-        return answer
         
 
 class Retriever:
-    def __init__(self, retriever_models, clickhouse_client):
+    def __init__(self, retriever_model, reranker_model, clickhouse_client):
         self._client = clickhouse_client
-        self._models = retriever_models
-        
+        self._retriever_model = retriever_model
+        self._reranker_model = reranker_model
         self._query = """
         WITH similar_chunks AS (
             SELECT 
@@ -139,10 +91,36 @@ class Retriever:
         
     def get_neighbors(self, question, k=5):
         topk = None
-        for model in self._models:
-            question_embedding = self._models[model].encode(question, batch_size=32, normalize_embeddings=True)
-            query = self._query.format(question_embedding=question_embedding.tolist(), knn_k=k, model=model)
-            
-            topk = pd.concat([topk, self._client.query_df(query).set_index('uuid')])
+        e5_embedding = self._retriever_model.encode(question, batch_size=16, normalize_embeddings=True)
+        e5_query = self._query.format(question_embedding=e5_embedding.tolist(), knn_k=k, model='e5')
+        e5_topk = self._client.query_df(e5_query).set_index('uuid')  
+        
+        bge_embedding = self._reranker_model.encode(question, 
+                                                    return_dense=True, 
+                                                    return_sparse=False, 
+                                                    return_colbert_vecs=True, 
+                                                    batch_size=16, 
+                                                    max_length=512)
+        
+        bge_query = self._query.format(question_embedding=bge_embedding['dense_vecs'].tolist(), knn_k=k, model='bge_m3')
+        bge_topk = self._client.query_df(bge_query).set_index('uuid') 
+        topk = pd.concat([e5_topk, bge_topk]).drop_duplicates(keep='first')
                 
-        return topk.text.unique().tolist(), topk.url.unique().tolist()
+        return topk.text.tolist(), topk.url.tolist(), bge_embedding['colbert_vecs']
+    
+    def rerank(self, question_embedding, documents, top_k):
+        topk_colbert = self._reranker_model.encode(documents, 
+                                                   return_dense=False, 
+                                                   return_sparse=False, 
+                                                   return_colbert_vecs=True, 
+                                                   batch_size=16, 
+                                                   max_length=512)['colbert_vecs']
+        scores = np.zeros((len(topk_colbert), ))
+        for ind, sample in enumerate(topk_colbert):
+            scores[ind] = -self._reranker_model.colbert_score(question_embedding, sample)
+        
+        return scores.argsort()[:top_k]
+    
+    @staticmethod
+    def get_topk(documents, urls, indexes):
+        return [documents[i] for i in indexes], list(set(urls[i] for i in indexes))
