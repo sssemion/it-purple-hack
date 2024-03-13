@@ -106,6 +106,12 @@ class Generator:
                                      num_beams=num_beams)[-1]
         return answer
         
+    def generate_question(self, document, temperature=0.6, num_beams=4):
+        answer = self._generate_text(self._config.QG_PROMPT.format(text=document),
+                                     temperature=temperature, 
+                                     num_beams=num_beams)[-1]
+        return answer
+        
 
 class Retriever:
     def __init__(self, retriever_models, clickhouse_client):
