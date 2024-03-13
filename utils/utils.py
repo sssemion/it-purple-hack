@@ -105,3 +105,40 @@ class Generator:
                                      num_beams=num_beams)[-1]
         return answer
         
+
+class Retriever:
+    def __init__(self, retriever_model, clickhouse_client):
+        self._client = clickhouse_client
+        self._model = retriever_model
+        
+        self._query = """
+        WITH similar_chunks AS (
+            SELECT 
+                c1.chunk_uuid AS similar_uuid,
+                c1.embedding AS similar_embedding,
+                cosineDistance(embedding, {question_embedding}) AS similarity_score
+            FROM 
+                chunk_embedding c1
+            ORDER BY 
+                similarity_score ASC
+            LIMIT {knn_k})
+        SELECT 
+            c.uuid AS uuid,
+            c.text AS text,
+            c.url AS url
+        FROM 
+            chunk c
+        JOIN 
+            similar_chunks s 
+        ON 
+            c.uuid = s.similar_uuid
+        WHERE
+            c.uuid IN (SELECT similar_uuid FROM similar_chunks)
+        """
+        
+    def get_neighbors(self, question, k=5):
+        question_embedding = self._model.encode(question, batch_size=32, normalize_embeddings=True)
+        query = self._query.format(question_embedding=question_embedding.tolist(), knn_k=k)
+        topk = self._client.query_df(query).set_index('uuid')
+        
+        return topk.text.tolist(), topk.url.unique().tolist()

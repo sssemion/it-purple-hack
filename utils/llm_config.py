@@ -1,3 +1,6 @@
+from dataclasses import dataclass
+
+@dataclass
 class GenerationConfig:
     max_tokens: int = 350
     do_sample: bool = True
