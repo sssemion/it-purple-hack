@@ -41,3 +41,6 @@ ClickHouse хранилище:
   - user: `viewer`
   - password: `viewer`
   - database: `dev`
+
+Решение на Google Colab
+https://colab.research.google.com/drive/1p6pM-ZaTFEI9t71Ut6Os131CLnekbkAJ?usp=sharing
