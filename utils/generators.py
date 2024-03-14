@@ -34,26 +34,24 @@ class ToxicityClassifier:
     def __init__(self, tokenizer: PreTrainedTokenizer, model: PreTrainedModel):
         self._model = model
         self._tokenizer = tokenizer
-        self.truncation = True
-        self.padding = True
+        self._truncation = True
+        self._padding = True
 
-    def is_toxic(self, text: str, tresh: int=0.4) -> str:
+    def __call__(self, text: str, tresh: int=0.4) -> str:
         with torch.no_grad():
             inputs = self._tokenizer(text,
                                      return_tensors='pt',
-                                     truncation=self.truncation,
-                                     padding=self.padding).to(self._model.device)
+                                     truncation=self._truncation,
+                                     padding=self._padding).to(self._model.device)
             
             proba = torch.sigmoid(self._model(**inputs).logits).cpu().numpy()
+            
         if isinstance(text, str):
             proba = proba[0]
             
         proba = 1 - proba.T[0] * (1 - proba.T[-1])
         
-        if proba <= tresh:
-            return "not toxic"
-        else:
-            return "toxic"
+        return proba > tresh
         
         
 
@@ -61,17 +59,17 @@ class SpellChecker:
     def __init__(self, tokenizer: PreTrainedTokenizer, model: PreTrainedModel):
         self._model = model
         self._tokenizer = tokenizer
-        self.max_input = 256
-        self.truncation = True
-        self.padding = "longest"
+        self._max_input = 256
+        self._truncation = True
+        self._padding = "longest"
         self._system_prompt = "Spell correct: {q}"
 
 
-    def get_answer(self, question: str) -> str:
+    def __call__(self, question: str) -> str:
         encoded = self._tokenizer(self._system_prompt.format(q=question),
-                            padding=self.padding,
-                            max_length=self.max_input,
-                            truncation=self.truncation,
+                            padding=self._padding,
+                            max_length=self._max_input,
+                            truncation=self._truncation,
                             return_tensors="pt")
 
         predicts = self._model.generate(**encoded.to(self._model.device))
@@ -97,7 +95,7 @@ class Generator:
                                                   max_new_tokens=self._max_tokens,
                                                   do_sample=self._config.do_sample,
                                                   num_beams=num_beams,
-                                                  num_return_sequences=self._config.num_return_sequences,
+                                                  num_return_sequences=n,
                                                   no_repeat_ngram_size=self._config.no_repeat_ngram_size,
                                                   temperature=temperature,
                                                   top_p=self._config.top_p,
@@ -107,28 +105,45 @@ class Generator:
 
             return resulted_texts
 
-    def get_answer(self, question, documents, urls, temperature=0.6, num_beams=4):
+    def __call__(self, question, documents, urls, temperature=0.6, num_beams=4):
         documents_retriever = ''
         formatted_urls = 'Использованные документы:\n'
+        
         for index, url in enumerate(urls):
             formatted_urls += f'{index+1}) {url} \n'
+            
         for i in range(len(documents)):
             documents_retriever += f'Документ c номером {i}: {documents[i]} \n'
         
-        answer = self._generate_text(self._config.QA_PROMPT.format(context=documents_retriever, question=question),
-                                     temperature=temperature, 
-                                     num_beams=num_beams)[-1]
+        cur_answer = self._generate_text(self._config.QA_PROMPT.format(context=documents_retriever, question=question),
+                                         temperature=temperature, 
+                                         num_beams=num_beams, 
+                                         n=self._config.num_return_sequences)
+        answer = ''
+        
+        for seq in cur_answer:
+            if len(seq) > len(answer):
+                answer = seq
+                
         answer = answer + '\n\n' + formatted_urls
         return answer
     
     def hyde(self, question, temperature=0.6, num_beams=4):
-        answer = self._generate_text(self._config.HYDE_PROMPT.format(question=question),
-                                     temperature=temperature, 
-                                     num_beams=num_beams)[-1]
+        cur_answer = self._generate_text(self._config.HYDE_PROMPT.format(question=question),
+                                         temperature=temperature, 
+                                         num_beams=num_beams, 
+                                         n=self._config.num_return_sequences)
+        answer = ''
+        
+        for seq in cur_answer:
+            if len(seq) > len(answer):
+                answer = seq
+                
         return answer
         
     def generate_question(self, document, temperature=0.6, num_beams=4):
         answer = self._generate_text(self._config.QG_PROMPT.format(text=document),
                                      temperature=temperature, 
-                                     num_beams=num_beams)[-1]
+                                     num_beams=num_beams, 
+                                     n=self._config.num_return_sequences)[-1]
         return answer

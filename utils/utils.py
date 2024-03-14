@@ -60,10 +60,11 @@ class Chunker:
         
 
 class Retriever:
-    def __init__(self, retriever_model, reranker_model, clickhouse_client):
+    def __init__(self, retriever_model, reranker_model, clickhouse_client, seq_len=512):
         self._client = clickhouse_client
         self._retriever_model = retriever_model
         self._reranker_model = reranker_model
+        self._seq_len = seq_len
         self._query = """
         WITH similar_chunks AS (
             SELECT 
@@ -89,33 +90,33 @@ class Retriever:
             c.uuid IN (SELECT similar_uuid FROM similar_chunks)
         """
         
-    def get_neighbors(self, question, k=5):
+    def get_neighbors(self, question, top_k=5, batch_size=16):
         topk = None
-        e5_embedding = self._retriever_model.encode(question, batch_size=16, normalize_embeddings=True)
-        e5_query = self._query.format(question_embedding=e5_embedding.tolist(), knn_k=k, model='e5')
+        e5_embedding = self._retriever_model.encode(question, batch_size=batch_size, normalize_embeddings=True)
+        e5_query = self._query.format(question_embedding=e5_embedding.tolist(), knn_k=top_k, model='e5')
         e5_topk = self._client.query_df(e5_query).set_index('uuid')  
         
         bge_embedding = self._reranker_model.encode(question, 
                                                     return_dense=True, 
                                                     return_sparse=False, 
                                                     return_colbert_vecs=True, 
-                                                    batch_size=16, 
-                                                    max_length=512)
+                                                    batch_size=batch_size, 
+                                                    max_length=self._seq_len)
         
-        bge_query = self._query.format(question_embedding=bge_embedding['dense_vecs'].tolist(), knn_k=k, model='bge_m3')
+        bge_query = self._query.format(question_embedding=bge_embedding['dense_vecs'].tolist(), knn_k=top_k, model='bge_m3')
         bge_topk = self._client.query_df(bge_query).set_index('uuid') 
         topk = pd.concat([e5_topk, bge_topk]).drop_duplicates(keep='first')
                 
         return topk.text.tolist(), topk.url.tolist(), bge_embedding['colbert_vecs']
     
-    def rerank(self, question_embedding, documents, top_k):
+    def rerank(self, question_embedding, documents, top_k, batch_size=16):
         topk_colbert = self._reranker_model.encode(documents, 
                                                    return_dense=False, 
                                                    return_sparse=False, 
                                                    return_colbert_vecs=True, 
-                                                   batch_size=16, 
-                                                   max_length=512)['colbert_vecs']
-        scores = np.zeros((len(topk_colbert), ))
+                                                   batch_size=batch_size, 
+                                                   max_length=self._seq_len)['colbert_vecs']
+        scores = np.zeros((len(topk_colbert)))
         for ind, sample in enumerate(topk_colbert):
             scores[ind] = -self._reranker_model.colbert_score(question_embedding, sample)
         
